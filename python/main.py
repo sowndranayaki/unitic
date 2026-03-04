@@ -1,0 +1,191 @@
+"""
+FastAPI server to host the Q&A module locally.
+"""
+
+import os
+import sys
+import asyncio
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+from qa_module import CustomQAModule
+import uvicorn
+
+
+app = FastAPI(
+    title="Q&A Module API",
+    description="Local Q&A service based on PDF data",
+    version="1.0.0"
+)
+
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+qa_module = None
+
+
+class QuestionRequest(BaseModel):
+    question: str
+
+
+class QuestionResponse(BaseModel):
+    answer: str
+
+
+class BatchQuestionsRequest(BaseModel):
+    questions: list[str]
+
+
+class BatchQuestionsResponse(BaseModel):
+    results: list[QuestionResponse]
+
+
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the Q&A module when the server starts."""
+    global qa_module
+    
+   
+    pdf_path = "data/exchange.pdf"
+    
+    if not os.path.exists(pdf_path):
+
+        pdf_path = "../data/exchange.pdf"
+    
+    if not os.path.exists(pdf_path):
+        print(f"Warning: PDF not found at {pdf_path}")
+        print("The API will start but questions cannot be answered without a PDF.")
+        return
+    
+    try:
+        print("Initializing Q&A module...")
+        
+        qa_module = CustomQAModule(pdf_path, clear_cache=True)
+        print("Q&A module ready!")
+    except Exception as e:
+        print(f"Error initializing Q&A module: {e}")
+        print("Make sure Ollama is running and the PDF exists.")
+
+
+@app.get("/")
+async def root():
+    """Root endpoint with API information."""
+    return {
+        "message": "Q&A Module API is running",
+        "endpoints": {
+            "ask": "/ask (POST) - Ask a single question",
+            "ask_batch": "/ask_batch (POST) - Ask multiple questions",
+            "health": "/health (GET) - Health check"
+        }
+    }
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {
+        "status": "healthy",
+        "qa_module_loaded": qa_module is not None
+    }
+
+
+@app.post("/ask", response_model=QuestionResponse)
+async def ask_question(request: QuestionRequest):
+    """
+    Ask a single question to the Q&A module with optimizations.
+    Supports caching and fast responses for repeated questions.
+    """
+    if qa_module is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Q&A module not initialized. Make sure the PDF exists and Ollama is running."
+        )
+    
+    if not request.question or not request.question.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Question cannot be empty"
+        )
+    
+    try:
+       
+        result = await asyncio.to_thread(qa_module.ask, request.question)
+        return QuestionResponse(
+            answer=result["answer"]
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing question: {str(e)}"
+        )
+
+
+@app.post("/ask_batch", response_model=BatchQuestionsResponse)
+async def ask_batch(request: BatchQuestionsRequest):
+    """
+    Ask multiple questions concurrently for maximum speed.
+    
+    Args:
+        request: BatchQuestionsRequest with 'questions' list
+        
+    Returns:
+        BatchQuestionsResponse with list of QuestionResponse objects
+    """
+    if qa_module is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Q&A module not initialized. Make sure the PDF exists and Ollama is running."
+        )
+    
+    if not request.questions or len(request.questions) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="Questions list cannot be empty"
+        )
+    
+    try:
+       
+        tasks = [
+            asyncio.to_thread(qa_module.ask, q)
+            for q in request.questions if q.strip()
+        ]
+        results_data = await asyncio.gather(*tasks)
+        results = [
+            QuestionResponse(answer=result["answer"])
+            for result in results_data
+        ]
+        
+        return BatchQuestionsResponse(results=results)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing questions: {str(e)}"
+        )
+
+
+if __name__ == "__main__":
+    print("Starting Q&A Module FastAPI Server...")
+    print("Server will be available at: http://localhost:8000")
+    print("API documentation at: http://localhost:8000/docs")
+    print("\nMake sure Ollama is running (ollama serve) before asking questions!")
+    
+    uvicorn.run(
+    app,
+    host="127.0.0.1",
+    port=8000,
+    log_level="info"
+)
+

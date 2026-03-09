@@ -79,20 +79,27 @@ class CustomQAModule:
         return hashlib.md5(question.lower().strip().encode()).hexdigest()
 
     def _format_answer(self, answer: str) -> str:
-        """Format answer with proper line breaks - each sentence on new line."""
-        
-        answer = answer.replace('\\n', ' ').replace('\\r', ' ')
-        answer = answer.replace('/n', ' ').replace('/n1', ' ').replace('/n2', ' ')
-      
-        answer = answer.strip()
-       
+        """Format answer with proper line breaks."""
         import re
-       
-        sentences = re.split(r'(?<=[.!?])\s+', answer)
-     
-        sentences = [s.strip() for s in sentences if s.strip()]
         
-        return '\n'.join(sentences)
+        # Convert escaped newlines to actual newlines
+        answer = answer.replace('\\n', '\n')
+        
+        # Remove /n patterns that might appear in the text (forward slash n)
+        answer = re.sub(r'/n\s*', '\n', answer)
+        
+        # Handle numbered list items: ensure they're on separate lines
+        answer = re.sub(r'(\d+\.)\s+', r'\n\1 ', answer)
+        
+        # Remove multiple consecutive newlines
+        answer = re.sub(r'\n{2,}', '\n', answer)
+        
+        # Clean up multiple spaces on the same line
+        answer = re.sub(r'[ \t]{2,}', ' ', answer)
+        
+        answer = answer.strip()
+        
+        return answer
 
  
     def _load_pdf(self):
@@ -207,6 +214,7 @@ CRITICAL RULES:
 - Combine information from multiple parts of the context if needed
 - Do NOT refuse to answer - search thoroughly first
 - Only say "I don't have this information" if the topic is COMPLETELY absent from context
+- Provide a clean, direct answer without any formatting markers or annotations
 
 Document Content:
 {context}
